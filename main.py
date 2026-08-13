@@ -36,6 +36,7 @@ app = FastAPI(
     title="MenuLens API",
     description="Extract structured menu data from a menu photo or PDF using Gemini.",
     version="1.0.0",
+    root_path="/py-api",
 )
 
 app.add_middleware(
