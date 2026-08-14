@@ -68,4 +68,27 @@ class Menu(BaseModel):
             cat = item.category or "uncategorized"
             grouped.setdefault(cat, []).append(item)
         return grouped
-   
+
+
+class CategorizeItemIn(BaseModel):
+    """A single item submitted for categorization."""
+    name: str = Field(..., description="Name of the dish or drink")
+    description: Optional[str] = Field(
+        None, description="Description text, if available"
+    )
+
+
+class CategorizeRequest(BaseModel):
+    """Request body for the /categorize streaming endpoint."""
+    items: list[CategorizeItemIn]
+    restaurant_name: Optional[str] = None
+
+
+class CategorizedItem(BaseModel):
+    """A single categorized item, as streamed back to the client."""
+    name: str
+    category: str
+    confidence: float = Field(
+        default=1.0, ge=0.0, le=1.0,
+        description="Model's confidence in the category assignment (0-1)"
+    )

@@ -6,32 +6,18 @@ Usage:
     python extract.py path/to/menu.pdf
 """
 
-import os
-import sys 
+import sys
 import json
 from pathlib import Path
 from typing import Optional, Union
 
 import google.generativeai as genai
-from dotenv import load_dotenv
 from pdf2image import convert_from_path
 from PIL import Image
 
+from gemini_client import MODEL_NAME
 from schemas import Menu, MenuItem
 from prompts import EXTRACTION_PROMPT_V1
-
-
-load_dotenv()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError(
-        "GEMINI_API_KEY not set. Create a .env file with GEMINI_API_KEY=your_key"
-    )
- 
-genai.configure(api_key=GEMINI_API_KEY)
- 
-MODEL_NAME = "gemini-flash-latest"  # change to gemini-2.5-pro for higher accuracy
 
 def load_images(file_path: Path) -> list[Image.Image]:
     """Load one or more images from an image file or PDF."""

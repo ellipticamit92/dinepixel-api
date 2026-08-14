@@ -6,20 +6,23 @@ Run:
     uvicorn main:app --host 0.0.0.0 --port 8000
 """
 
+import json
 import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Iterator, Literal, Optional
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from categorize import categorize_items_stream
 from extract import extract_menu
-from schemas import Menu
+from schemas import CategorizeItemIn, CategorizeRequest, Menu
 
 load_dotenv()
 
@@ -101,6 +104,27 @@ async def get_extraction_job(job_id: str) -> JobStatus:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+def sse_categorize(items: list[CategorizeItemIn]) -> Iterator[str]:
+    try:
+        for categorized in categorize_items_stream(items):
+            yield f"data: {categorized.model_dump_json()}\n\n"
+    except Exception as e:
+        yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        return
+    yield "event: done\ndata: {}\n\n"
+
+
+@app.post("/categorize", dependencies=[Depends(require_api_key)])
+async def categorize_menu(request: CategorizeRequest) -> StreamingResponse:
+    if not request.items:
+        raise HTTPException(status_code=400, detail="items must not be empty")
+    return StreamingResponse(
+        sse_categorize(request.items),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/health")

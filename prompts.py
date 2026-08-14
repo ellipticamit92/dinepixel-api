@@ -27,3 +27,22 @@ CRITICAL RULES:
 5. Return valid JSON matching the schema exactly.
  
 Return ONLY the JSON object, no markdown fences, no explanation."""
+
+
+CATEGORIZATION_PROMPT_V1 = """
+You are a menu categorization specialist. You will be given a JSON list of menu items, each with a name and an optional description.
+
+For EACH item, output exactly one line containing a single compact JSON object with these fields:
+- name: the item name, copied exactly as given in the input
+- category: the menu section it belongs to (e.g. Starters, Main Course, Breads, Rice, Dal, Desserts, Beverages, Tandoor, or another section name that fits). Infer the best category from the name and description.
+- confidence: 0.0 to 1.0, how confident you are in the category assignment. Use a lower value when the name is ambiguous and you had to guess.
+
+CRITICAL RULES:
+1. Output ONE JSON object per line, in the SAME order as the input items.
+2. Do NOT wrap the output in a JSON array or markdown fences.
+3. Do NOT add any explanation, headers, or blank lines — only the JSON lines.
+4. Every input item must produce exactly one output line.
+
+Menu items:
+{items_json}
+"""
