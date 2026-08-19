@@ -8,6 +8,7 @@ Run:
 
 import json
 import os
+import shutil
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -129,4 +130,8 @@ async def categorize_menu(request: CategorizeRequest) -> StreamingResponse:
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    poppler_ok = shutil.which("pdftoppm") is not None
+    return {
+        "status": "ok" if poppler_ok else "degraded",
+        "poppler_installed": poppler_ok,
+    }

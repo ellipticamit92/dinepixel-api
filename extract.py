@@ -13,6 +13,7 @@ from typing import Optional, Union
 
 import google.generativeai as genai
 from pdf2image import convert_from_path
+from pdf2image.exceptions import PDFInfoNotInstalledError
 from PIL import Image
 
 from gemini_client import MODEL_NAME
@@ -25,8 +26,14 @@ def load_images(file_path: Path) -> list[Image.Image]:
     if suffix in {".jpg", ".jpeg", ".png", ".webp"}:
         return [Image.open(file_path)]
     if suffix == ".pdf":
-        # Higher DPI = better OCR but slower and more tokens
-        return convert_from_path(file_path, dpi=200)
+        try:
+            # Higher DPI = better OCR but slower and more tokens
+            return convert_from_path(file_path, dpi=200)
+        except PDFInfoNotInstalledError:
+            raise RuntimeError(
+                "poppler-utils is not installed on this system (pdftoppm/pdfinfo not found on PATH). "
+                "Install it with: sudo apt-get install -y poppler-utils"
+            )
     raise ValueError(f"Unsupported file type: {suffix}")
 
 
