@@ -14,7 +14,7 @@ echo "$LOG_PREFIX → Pulling latest code..."
 git pull origin main
 
 echo "$LOG_PREFIX → Activating virtualenv..."
-source .venv/bin/activate
+source venv/bin/activate
 
 echo "$LOG_PREFIX Python: $(python --version), pip: $(pip --version | awk '{print $2}'), pm2: $(pm2 -v)"
 
