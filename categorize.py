@@ -10,9 +10,9 @@ batch to complete.
 import json
 from typing import Iterator
 
-import google.generativeai as genai
+from google.genai import types
 
-from gemini_client import MODEL_NAME
+from gemini_client import client, MODEL_NAME
 from prompts import CATEGORIZATION_PROMPT_V1
 from schemas import CategorizedItem, CategorizeItemIn
 
@@ -22,13 +22,12 @@ def categorize_items_stream(items: list[CategorizeItemIn]) -> Iterator[Categoriz
     items_json = json.dumps([item.model_dump() for item in items], ensure_ascii=False)
     prompt = CATEGORIZATION_PROMPT_V1.format(items_json=items_json)
 
-    model = genai.GenerativeModel(
-        model_name=MODEL_NAME,
-        generation_config={"temperature": 0.1},
-    )
-
     buffer = ""
-    for chunk in model.generate_content(prompt, stream=True):
+    for chunk in client.models.generate_content_stream(
+        model=MODEL_NAME,
+        contents=prompt,
+        config=types.GenerateContentConfig(temperature=0.1),
+    ):
         if not chunk.text:
             continue
         buffer += chunk.text

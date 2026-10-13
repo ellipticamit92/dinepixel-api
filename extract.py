@@ -1,6 +1,6 @@
 """
 Phase 1 MVP: Extract structured menu data from an image or PDF.
- 
+
 Usage:
     python extract.py path/to/menu.jpg
     python extract.py path/to/menu.pdf
@@ -8,85 +8,129 @@ Usage:
 
 import sys
 import json
+import logging
+import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
-import google.generativeai as genai
-from pdf2image import convert_from_path
-from pdf2image.exceptions import PDFInfoNotInstalledError
+from google.genai import types
 from PIL import Image
 
-from gemini_client import MODEL_NAME
+from gemini_client import client, MODEL_NAME
 from schemas import Menu, MenuItem
 from prompts import EXTRACTION_PROMPT_V1
 
-def load_images(file_path: Path) -> list[Image.Image]:
-    """Load one or more images from an image file or PDF."""
-    suffix = file_path.suffix.lower()
-    if suffix in {".jpg", ".jpeg", ".png", ".webp"}:
-        return [Image.open(file_path)]
-    if suffix == ".pdf":
-        try:
-            # Higher DPI = better OCR but slower and more tokens
-            return convert_from_path(file_path, dpi=200)
-        except PDFInfoNotInstalledError:
-            raise RuntimeError(
-                "poppler-utils is not installed on this system (pdftoppm/pdfinfo not found on PATH). "
-                "Install it with: sudo apt-get install -y poppler-utils"
-            )
-    raise ValueError(f"Unsupported file type: {suffix}")
+logger = logging.getLogger("extract")
 
 
-def extract_from_image(image: Image.Image) -> dict:
-    """Send one image to Gemini and get back parsed JSON."""
-    model = genai.GenerativeModel(
-        model_name=MODEL_NAME,
-        generation_config={
-            "temperature": 0.1,  # low temp = more consistent extraction
-            "response_mime_type": "application/json",  # forces JSON output
-        },
+def _call_gemini(content: list) -> dict:
+    try:
+        response = client.models.generate_content(
+            model=MODEL_NAME,
+            contents=content,
+            config=types.GenerateContentConfig(
+                temperature=0.1,
+                response_mime_type="application/json",
+            ),
+        )
+        finish_reason = response.candidates[0].finish_reason if response.candidates else "unknown"
+        logger.info("gemini response status=ok finish_reason=%s", finish_reason)
+        return json.loads(response.text)
+    except Exception as e:
+        logger.error("gemini error=%s detail=%s", type(e).__name__, e)
+        raise
+
+
+def extract_pdf(file_path: Path) -> dict:
+    """Upload PDF via File API then pass the file reference to Gemini."""
+    logger.info("uploading pdf via File API size_bytes=%d", file_path.stat().st_size)
+    uploaded = client.files.upload(
+        file=str(file_path),
+        config=types.UploadFileConfig(mime_type="application/pdf"),
     )
-    response = model.generate_content([EXTRACTION_PROMPT_V1, image])
-    return json.loads(response.text)
+    while uploaded.state.name == "PROCESSING":
+        logger.info("pdf file_api state=PROCESSING, waiting...")
+        time.sleep(3)
+        uploaded = client.files.get(name=uploaded.name)
+    if uploaded.state.name != "ACTIVE":
+        raise RuntimeError(f"File API upload failed: state={uploaded.state.name}")
+    logger.info("pdf file_api state=ACTIVE uri=%s", uploaded.uri)
+    try:
+        return _call_gemini([EXTRACTION_PROMPT_V1, uploaded])
+    finally:
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
+
+
+def extract_image(file_path: Path) -> dict:
+    """Resize if needed, then upload via File API and pass the reference to Gemini."""
+    image = Image.open(file_path)
+    max_width = 1600
+    if image.width > max_width:
+        ratio = max_width / image.width
+        image = image.resize((max_width, int(image.height * ratio)), Image.LANCZOS)
+        logger.info("resized image to %dx%d", image.width, image.height)
+        image.save(file_path)
+
+    suffix = file_path.suffix.lower()
+    mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+    mime_type = mime_map.get(suffix, "image/jpeg")
+
+    logger.info("uploading image via File API size_bytes=%d", file_path.stat().st_size)
+    uploaded = client.files.upload(
+        file=str(file_path),
+        config=types.UploadFileConfig(mime_type=mime_type),
+    )
+    while uploaded.state.name == "PROCESSING":
+        logger.info("image file_api state=PROCESSING, waiting...")
+        time.sleep(3)
+        uploaded = client.files.get(name=uploaded.name)
+    if uploaded.state.name != "ACTIVE":
+        raise RuntimeError(f"File API upload failed: state={uploaded.state.name}")
+    logger.info("image file_api state=ACTIVE uri=%s", uploaded.uri)
+    try:
+        return _call_gemini([EXTRACTION_PROMPT_V1, uploaded])
+    finally:
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
+
+
+def build_menu(raw: dict) -> Menu:
+    """Build a validated Menu from a raw Gemini response dict."""
+    all_items: list[MenuItem] = []
+    restaurant_name = raw.get("restaurant_name") if isinstance(raw, dict) else None
+    items_raw = raw.get("items", []) if isinstance(raw, dict) else raw
+
+    for item_raw in items_raw:
+        try:
+            all_items.append(MenuItem.model_validate(item_raw))
+        except Exception as e:
+            logger.warning("skipping invalid item error=%s", e)
+
+    logger.info("validated items=%d", len(all_items))
+    return Menu(restaurant_name=restaurant_name, items=all_items)
+
 
 def extract_menu(file_path: Union[str, Path]) -> Menu:
-    """Main entry point. Extract a structured Menu from a file."""
+    """CLI entry point. Routes to extract_pdf or extract_image based on suffix."""
     file_path = Path(file_path)
     if not file_path.exists():
         raise FileNotFoundError(file_path)
- 
-    print(f"[1/3] Loading {file_path.name}...")
-    images = load_images(file_path)
-    print(f"      Loaded {len(images)} page(s)")
- 
-    all_items: list[MenuItem] = []
-    restaurant_name = None
- 
-    for i, img in enumerate(images, start=1):
-        print(f"[2/3] Extracting page {i}/{len(images)}...")
-        try:
-            raw = extract_from_image(img)
-        except Exception as e:
-            print(f"      Page {i} failed: {e}")
-            continue
- 
-        # The model might return {"items": [...]} or a raw list
-        if isinstance(raw, dict):
-            restaurant_name = restaurant_name or raw.get("restaurant_name")
-            items_raw = raw.get("items", [])
-        else:
-            items_raw = raw
- 
-        for item_raw in items_raw:
-            try:
-                item = MenuItem.model_validate(item_raw)
-                all_items.append(item)
-            except Exception as e:
-                print(f"      Skipping invalid item: {e}")
- 
-    print(f"[3/3] Validating {len(all_items)} items...")
-    menu = Menu(restaurant_name=restaurant_name, items=all_items)
-    return menu
+
+    suffix = file_path.suffix.lower()
+    logger.info("loading file=%s suffix=%s", file_path.name, suffix)
+
+    try:
+        raw = extract_pdf(file_path) if suffix == ".pdf" else extract_image(file_path)
+    except Exception as e:
+        logger.error("extraction failed error=%s", e)
+        raise
+
+    return build_menu(raw)
 
 def print_summary(menu: Menu) -> None:
     print("\n" + "=" * 60)
@@ -106,19 +150,18 @@ def main():
     if len(sys.argv) < 2:
         print("Usage: python extract.py <path_to_menu.pdf_or_image>")
         sys.exit(1)
- 
+
     file_path = sys.argv[1]
     menu = extract_menu(file_path)
- 
+
     # Print human-readable summary
     print_summary(menu)
- 
+
     # Save full JSON output
     output_path = Path(file_path).with_suffix(".extracted.json")
     output_path.write_text(menu.model_dump_json(indent=2))
     print(f"\n✓ Full output saved to {output_path}")
- 
- 
+
+
 if __name__ == "__main__":
     main()
-    

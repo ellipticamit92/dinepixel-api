@@ -4,7 +4,7 @@ Shared Gemini client configuration.
 
 import os
 
-import google.generativeai as genai
+from google import genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,6 +15,6 @@ if not GEMINI_API_KEY:
         "GEMINI_API_KEY not set. Create a .env file with GEMINI_API_KEY=your_key"
     )
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-MODEL_NAME = "gemini-flash-latest"  # change to gemini-2.5-pro for higher accuracy
+MODEL_NAME = "gemini-2.0-flash"  # change to gemini-2.5-pro for higher accuracy

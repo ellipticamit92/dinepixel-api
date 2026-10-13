@@ -7,6 +7,7 @@ Run:
 """
 
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -15,6 +16,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Literal, Optional
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("extract")
+
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +29,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from categorize import categorize_items_stream
-from extract import extract_menu
+from extract import build_menu, extract_image, extract_pdf
 from schemas import CategorizeItemIn, CategorizeRequest, Menu
 
 load_dotenv()
@@ -67,13 +74,21 @@ JOBS: dict[str, JobStatus] = {}
 
 
 def run_extraction(job_id: str, file_path: Path) -> None:
+    suffix = file_path.suffix.lower()
+    logger.info("job=%s status=processing file=%s type=%s", job_id, file_path.name, suffix)
     JOBS[job_id].status = "processing"
     try:
-        JOBS[job_id].menu = extract_menu(file_path)
+        if suffix == ".pdf":
+            raw = extract_pdf(file_path)
+        else:
+            raw = extract_image(file_path)
+        JOBS[job_id].menu = build_menu(raw)
         JOBS[job_id].status = "done"
+        logger.info("job=%s status=done", job_id)
     except Exception as e:
         JOBS[job_id].error = str(e)
         JOBS[job_id].status = "error"
+        logger.error("job=%s status=error error=%s", job_id, e)
     finally:
         file_path.unlink(missing_ok=True)
         file_path.parent.rmdir()
@@ -94,6 +109,7 @@ async def create_extraction_job(background_tasks: BackgroundTasks, file: UploadF
     tmp_path = tmp_dir / f"upload{suffix}"
     tmp_path.write_bytes(contents)
 
+    logger.info("job=%s status=pending file=%s size=%d", job_id, file.filename, len(contents))
     JOBS[job_id] = JobStatus(job_id=job_id, status="pending", created_at=datetime.now(timezone.utc))
     background_tasks.add_task(run_extraction, job_id, tmp_path)
     return JOBS[job_id]
