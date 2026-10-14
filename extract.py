@@ -23,22 +23,36 @@ from prompts import EXTRACTION_PROMPT_V1
 logger = logging.getLogger("extract")
 
 
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 2  # seconds, doubles each attempt
+
+
 def _call_gemini(content: list) -> dict:
-    try:
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=content,
-            config=types.GenerateContentConfig(
-                temperature=0.1,
-                response_mime_type="application/json",
-            ),
-        )
-        finish_reason = response.candidates[0].finish_reason if response.candidates else "unknown"
-        logger.info("gemini response status=ok finish_reason=%s", finish_reason)
-        return json.loads(response.text)
-    except Exception as e:
-        logger.error("gemini error=%s detail=%s", type(e).__name__, e)
-        raise
+    last_error: Exception = RuntimeError("no attempts made")
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=content,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                ),
+            )
+            finish_reason = response.candidates[0].finish_reason if response.candidates else "unknown"
+            logger.info("gemini response status=ok finish_reason=%s", finish_reason)
+            return json.loads(response.text)
+        except Exception as e:
+            last_error = e
+            if any(code in str(e) for code in ("503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED")):
+                wait = _RETRY_BASE_DELAY * (2 ** attempt)
+                logger.warning("gemini attempt=%d/%d retryable error=%s retrying in %ds", attempt + 1, _MAX_RETRIES, e, wait)
+                time.sleep(wait)
+                continue
+            logger.error("gemini error=%s detail=%s", type(e).__name__, e)
+            raise
+    logger.error("gemini failed after %d attempts last_error=%s", _MAX_RETRIES, last_error)
+    raise last_error
 
 
 def extract_pdf(file_path: Path) -> dict:
